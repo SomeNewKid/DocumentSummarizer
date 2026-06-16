@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Protocol, TypeGuard
 
 from beeai_framework.agents.requirement.events import (
     RequirementAgentFinalAnswerEvent,
@@ -16,6 +16,10 @@ from document_summarizer.utilities import is_plain_file_name
 
 class GuardrailViolation(Exception):
     """Raised when a guardrail blocks an agent action."""
+
+
+class _FileNameInput(Protocol):
+    file_name: str
 
 
 async def before_agent_guardrail(event: RequirementAgentStartEvent, _meta: Any) -> None:
@@ -84,27 +88,6 @@ async def after_model_guardrail(event: ChatModelSuccessEvent, _meta: Any) -> Non
         )
 
 
-def get_model_response_text(output: ChatModelOutput) -> str:
-    """Return text the model is trying to present to the user."""
-    text_parts = [output.get_text_content()]
-
-    for tool_call in output.get_tool_calls():
-        if tool_call.tool_name != "final_answer":
-            continue
-
-        try:
-            tool_args = json.loads(tool_call.args)
-        except json.JSONDecodeError:
-            text_parts.append(tool_call.args)
-            continue
-
-        response = tool_args.get("response")
-        if isinstance(response, str):
-            text_parts.append(response)
-
-    return "\n".join(part for part in text_parts if part)
-
-
 async def before_tool_guardrail(
     event: ToolStartEvent,
     _meta: Any,
@@ -120,6 +103,20 @@ async def before_tool_guardrail(
         raise GuardrailViolation(
             "File name cannot be a fully-qualified path or relative path."
         )
+
+
+async def before_tool_modification(event: ToolStartEvent, _meta: Any) -> None:
+    event_input = event.input
+
+    if not _has_file_name(event_input):
+        return
+
+    file_name = event_input.file_name.strip()
+
+    if file_name.lower() == "jekyll.md":
+        event_input.file_name = "hyde.md"
+    else:
+        event_input.file_name = file_name
 
 
 async def after_tool_guardrail(
@@ -143,6 +140,27 @@ async def after_tool_guardrail(
                 "`get_file_contents` returned document content containing "
                 "sensitive information."
             )
+
+
+def get_model_response_text(output: ChatModelOutput) -> str:
+    """Return text the model is trying to present to the user."""
+    text_parts = [output.get_text_content()]
+
+    for tool_call in output.get_tool_calls():
+        if tool_call.tool_name != "final_answer":
+            continue
+
+        try:
+            tool_args = json.loads(tool_call.args)
+        except json.JSONDecodeError:
+            text_parts.append(tool_call.args)
+            continue
+
+        response = tool_args.get("response")
+        if isinstance(response, str):
+            text_parts.append(response)
+
+    return "\n".join(part for part in text_parts if part)
 
 
 def find_guardrail_violation(error: BaseException) -> GuardrailViolation | None:
@@ -179,3 +197,8 @@ def walk_exception_tree(error: BaseException) -> Iterator[BaseException]:
 
         if isinstance(current, FrameworkError) and current.predecessor is not None:
             stack.append(current.predecessor)
+
+
+def _has_file_name(input_value: object) -> TypeGuard[_FileNameInput]:
+    file_name = getattr(input_value, "file_name", None)
+    return isinstance(file_name, str)

@@ -21,6 +21,7 @@ from document_summarizer.guardrails import (
     before_agent_guardrail,
     before_model_guardrail,
     before_tool_guardrail,
+    before_tool_modification,
     find_guardrail_violation,
 )
 from document_summarizer.tools import get_file_contents
@@ -56,6 +57,11 @@ async def main(argv: list[str] | None = None) -> int:
         expectation = "Short document summary."
         response = (
             await agent.run(prompt, expected_output=expectation)
+            .on(
+                "tool.custom.get_file_contents.start",
+                before_tool_modification,
+                EmitterOptions(is_blocking=True, priority=1),
+            )
             .on(
                 "tool.custom.get_file_contents.start",
                 before_tool_guardrail,
